@@ -1,0 +1,119 @@
+<?php
+
+function awstats_mfg_permission() {
+  $items = array();
+  $items['administer awstats module'] = array(
+    'title' => t('Administer Awstats module'),
+    );
+  $items['view awstats'] = array(
+    'title' => t('View Awstats'),
+    );
+  return $items;
+}
+
+function awstats_mfg_menu() {
+  $items = array();
+  $items['admin/config/awstats_mfg'] = array(
+    'title' => 'Awstats Configuration',
+    'description' => 'Configure the Awstats module',
+    'type' => MENU_NORMAL_ITEM,
+    'access arguments' => array('administer awstats module'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('awstats_mfg_admin'),
+    );
+  $items['admin/reports/awstats'] = array(
+    'title' => 'Awstats',
+    'description' => '',
+    'type' => MENU_NORMAL_ITEM,
+    'access arguments' => array('view awstats'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('awstats_mfg_form'),
+    );
+  return $items;
+}
+
+function awstats_mfg_form($form, &$form_state) {
+  if(!array_key_exists('storage', $form_state)) {
+    $form_state['storage'] = array();
+    $form_state['storage']['output_table'] = null;
+  }
+  $form['period']['month'] = array(
+    '#type' => 'select',
+    '#title' => t('Month'),
+    '#options' => array( 1 =>'Jan', 2 =>'Feb', 3 =>'Mar', 4 =>'Apr', 5 =>'May', 
+      6 =>'Jun', 7 =>'Jul', 8 =>'Aug', 9 =>'Sep', 10 =>'Oct', 11 =>'Nov',
+      12 =>'Dec', 'all' =>'- Year -'),
+    '#default_value' => 'all',
+
+    );
+  $this_year = date("Y");
+  $last_year = $this_year - 1;
+  $form['period']['year'] = array(
+    '#type' => 'select',
+    '#title' => t('Year'),
+    '#options' => array( $last_year => $last_year, $this_year => $this_year),
+    '#default_value' => $this_year,
+    );
+  $form['query'] = array(
+    '#type' => 'submit',
+    '#value' => t('Query'),
+    );
+  $have_results = $form_state['storage']['output_table'] != null;
+  if($have_results) {
+    $form['results'] = array(
+      '#prefix' => '<div class="awstats-results">',
+      '#markup' => $form_state['storage']['output_table'],
+      '#suffix' => '</div>');
+    drupal_add_css(drupal_get_path('module', 'awstats_mfg').'/css/awstats_default.css');
+  }
+  return $form;
+}
+
+function awstats_mfg_form_submit($form, &$form_state) {
+  $config = 'mfg.'.$_SERVER['HTTP_HOST'];
+  $awstats_prog = variable_get('awstats_mfg_prog', '/usr/local/cpanel/3rdparty/bin/awstats.pl');
+  $month_arg = $form_state['values']['month'] == 'all' ? '' : '-month='.$form_state['values']['month'];
+  $year_arg = '-year='.$form_state['values']['year'];
+  $cmd = "unset GATEWAY_INTERFACE && $awstats_prog -config=$config -update -output -staticlinks $month_arg $year_arg";
+  //dpm($cmd);
+  exec($cmd, $output);
+  // Remove everything up to and including <body>
+  while(count($output) > 0) {
+    $line = array_shift($output);
+    if(strpos($line, '<body') !== false) {
+      break;
+    }
+  }
+  // Remove everything from the end to and including </body>
+  while(count($output) > 0) {
+    $line = array_pop($output);
+    if(strpos($line, '</body') !== false) {
+      break;
+    }
+  }
+  $output_table = implode("\n", $output);
+  $form_state['storage']['output_table'] = $output_table;
+  $form_state['rebuild'] = true;
+}
+
+function awstats_mfg_admin() {
+  $form = array();
+  $form['awstats_mfg_prog'] = array(
+    '#type' => 'textfield',
+    '#default_value' => variable_get('awstats_mfg_prog', '/usr/local/cpanel/3rdparty/bin/awstats.pl'),
+    '#title'=> t('Awstats program'),
+    '#description' => t('Path to the awstats.pl program, including the program name'),
+    '#required' => true,
+    '#size' => 60,
+    );
+  return system_settings_form($form);
+}
+
+function awstats_mfg_cron() {
+  $config = 'mfg.'.$_SERVER['HTTP_HOST'];
+  $awstats_prog = variable_get('awstats_mfg_prog', '/usr/local/cpanel/3rdparty/bin/awstats.pl');
+  $cmd = "unset GATEWAY_INTERFACE && $awstats_prog -config=$config";
+  //dpm($cmd);
+  exec($cmd, $output);
+  //dpm($output);
+}

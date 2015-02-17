@@ -1,0 +1,6 @@
+name = Awstats
+description = Support for Awstats
+core = 7.x
+;package = 
+;dependencies[] = remote_image_field
+version = "7.x-1.0"
