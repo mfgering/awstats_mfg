@@ -70,10 +70,155 @@ function awstats_mfg_form($form, &$form_state) {
 }
 
 function awstats_mfg_form_submit($form, &$form_state) {
+  $month_arg = $form_state['values']['month'];
+  $year_arg =  $form_state['values']['year'];
+  $output_table = _awstats_mfg_report($month_arg, $year_arg);
+  $form_state['storage']['output_table'] = $output_table;
+  $form_state['rebuild'] = true;
+}
+
+function awstats_mfg_admin($form, &$form_state) {
+  $form = array();
+  $form['awstats_mfg_prog'] = array(
+    '#type' => 'textfield',
+    '#default_value' => variable_get('awstats_mfg_prog', '/usr/local/cpanel/3rdparty/bin/awstats.pl'),
+    '#title'=> t('Awstats program'),
+    '#description' => t('Path to the awstats.pl program, including the program name'),
+    '#required' => true,
+    '#size' => 60,
+    );
+  $form['email'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Email Reporting'),
+    );
+  $form['email']['enable_email'] = array(
+    '#type' => 'checkbox',
+    '#default_value' => variable_get('awstats_mfg_enable_email'),
+    '#title' => t('Enable email reporting'),
+    );
+  $form['email']['awstats_mfg_recipients'] = array(
+    '#type' => 'textarea',
+    '#default_value' => variable_get('awstats_mfg_recipients', ''),
+    '#title'=> t('Recipients'),
+    '#description' => t('Recipients, separated by commas.'),
+    );
+  $form['email']['awstats_mfg_email_days_of_month'] = array(
+    '#type' => 'textfield',
+    '#default_value' => variable_get('awstats_mfg_email_days_of_month', ''),
+    '#title'=> t('Email reports on days of the month'),
+    '#description' => t('Days, separated by commas.'),
+    '#size' => 60,
+    );
+  $form['email']['awstats_mfg_email_test_recipients'] = array(
+    '#type' => 'textfield',
+    '#default_value' => variable_get('awstats_mfg_email_test_recipients', ''),
+    '#title'=> t('Test email recipients'),
+    '#description' => t('Recipients, separated by commas.'),
+    '#size' => 60,
+    );
+  $form['email']['send_test'] = array(
+    '#type' => 'submit',
+    '#value' => t('Send test email'),
+    '#submit' => array('awstats_mfg_send_test_email'),
+    );
+
+  $form['save'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save configuration'),
+    );
+  return $form;
+}
+
+function awstats_mfg_admin_validate($form, &$form_state) {
+  $prog = $form_state['values']['awstats_mfg_prog'];
+  if(!is_executable($prog)) {
+    form_set_error('awstats_mfg_prog', t("The program file either does not exist or is not executable."));
+  }
+  $recipients = _awstats_mfg_get_recipients($form_state['values']['awstats_mfg_recipients']);
+  foreach($recipients as $recipient) {
+    if(!$recipient || ! valid_email_address($recipient)) {
+      form_set_error('awstats_mfg_recipients', t('Bad email recipient "%r"', array('%r' => $recipient)));
+    }
+  }
+  $days_of_month = _awstats_mfg_get_days_of_month($form_state['values']['awstats_mfg_email_days_of_month']);
+  foreach($days_of_month as $day) {
+    if(!ctype_digit($day) || $day < 1 || $day > 31) {
+      form_set_error('awstats_mfg_email_days_of_month', t('Bad day of month "%r"', array('%r' => $day)));
+    }
+  }
+  $recipients = _awstats_mfg_get_recipients($form_state['values']['awstats_mfg_email_test_recipients']);
+  foreach($recipients as $recipient) {
+    if(!$recipient || ! valid_email_address($recipient)) {
+      form_set_error('awstats_mfg_email_test_recipients', t('Bad email recipient "%r"', array('%r' => $recipient)));
+    }
+  }
+}
+
+function awstats_mfg_send_test_email($form, &$form_state) {
+  $mon = date('n');
+  $output_table = _awstats_mfg_report($mon);
+
+  $module = 'awstats_mfg';
+  $key = 'awstats';
+  $to = _awstats_mfg_get_recipients($form_state['values']['awstats_mfg_email_test_recipients']);
+  $from = variable_get('site_email');
+  //TODO: Check that $to and $from have values
+  $params['message'] = $output_table;
+  $language = language_default();
+  $send = true;
+  $result = drupal_mail($module, $key, $to, $language, $params, $from, $send);
+  if ($result['result'] == TRUE) {
+    drupal_set_message(t('The test report has been sent.'));
+  }
+  else {
+    drupal_set_message(t('There was a problem sending the report and it was not sent.'), 'error');
+  }
+}
+
+function awstats_mfg_admin_submit($form, &$form_state) {
+  variable_set('awstats_mfg_prog', $form_state['values']['awstats_mfg_prog']);
+  variable_set('awstats_mfg_enable_email', $form_state['values']['enable_email']);
+  variable_set('awstats_mfg_recipients', $form_state['values']['awstats_mfg_recipients']);
+  variable_set('awstats_mfg_email_days_of_month', $form_state['values']['awstats_mfg_email_days_of_month']);
+  variable_set('awstats_mfg_email_test_recipients', $form_state['values']['awstats_mfg_email_test_recipients']);
+  drupal_set_message(t('Awstats configuration saved.'));
+  //dpm($form_state);
+}
+
+function awstats_mfg_cron() {
   $config = 'mfg.'.$_SERVER['HTTP_HOST'];
   $awstats_prog = variable_get('awstats_mfg_prog', '/usr/local/cpanel/3rdparty/bin/awstats.pl');
-  $month_arg = $form_state['values']['month'] == 'all' ? '' : '-month='.$form_state['values']['month'];
-  $year_arg = '-year='.$form_state['values']['year'];
+  $cmd = "unset GATEWAY_INTERFACE && $awstats_prog -config=$config";
+  //dpm($cmd);
+  exec($cmd, $output);
+  //dpm($output);
+}
+
+function _awstats_mfg_get_recipients($str) {
+  $recipients = array();
+  if(trim($str)) {
+    foreach(explode(',', $str) as $recipient) {
+      $recipients[] = trim($recipient);
+    }
+  }
+  return $recipients;
+}
+
+function _awstats_mfg_get_days_of_month($str) {
+  $days = array();
+  if(trim($str)) {
+    foreach(explode(',', $str) as $day) {
+      $days[] = trim($day);
+    }
+  }
+  return $days;
+}
+
+function _awstats_mfg_report($month_arg = 'all', $year_arg = '') {
+  $config = 'mfg.'.$_SERVER['HTTP_HOST'];
+  $awstats_prog = variable_get('awstats_mfg_prog', '/usr/local/cpanel/3rdparty/bin/awstats.pl');
+  $month_arg = $month_arg == 'all' ? '' : '-month='.$month_arg;
+  $year_arg =  $year_arg ? '-year='.$year_arg : '';
   $cmd = "unset GATEWAY_INTERFACE && $awstats_prog -config=$config -update -output -staticlinks $month_arg $year_arg";
   //dpm($cmd);
   exec($cmd, $output);
@@ -92,28 +237,22 @@ function awstats_mfg_form_submit($form, &$form_state) {
     }
   }
   $output_table = implode("\n", $output);
-  $form_state['storage']['output_table'] = $output_table;
-  $form_state['rebuild'] = true;
+  return $output_table;
 }
 
-function awstats_mfg_admin() {
-  $form = array();
-  $form['awstats_mfg_prog'] = array(
-    '#type' => 'textfield',
-    '#default_value' => variable_get('awstats_mfg_prog', '/usr/local/cpanel/3rdparty/bin/awstats.pl'),
-    '#title'=> t('Awstats program'),
-    '#description' => t('Path to the awstats.pl program, including the program name'),
-    '#required' => true,
-    '#size' => 60,
-    );
-  return system_settings_form($form);
-}
-
-function awstats_mfg_cron() {
-  $config = 'mfg.'.$_SERVER['HTTP_HOST'];
-  $awstats_prog = variable_get('awstats_mfg_prog', '/usr/local/cpanel/3rdparty/bin/awstats.pl');
-  $cmd = "unset GATEWAY_INTERFACE && $awstats_prog -config=$config";
-  //dpm($cmd);
-  exec($cmd, $output);
-  //dpm($output);
+/**
+ * Implements hook_mail()
+ */
+function awstats_mfg_mail($key, &$message, $params) {
+  global $user;
+  $options = array(
+    'langcode' => $message['language']->language,
+  );
+  switch($key) {
+    case 'awstats':
+      $message['subject'] = t('Website statistics for @site-name', array(
+        '@site-name' => variable_get('site_name', '*unknown*')), $options);
+      $message['body'][] = $params['message'];
+    break;
+  }
 }
