@@ -155,23 +155,29 @@ function awstats_mfg_admin_validate($form, &$form_state) {
 }
 
 function awstats_mfg_send_test_email($form, &$form_state) {
+  // Save the recipients field
+  variable_set('awstats_mfg_recipients', $form_state['values']['awstats_mfg_recipients']);
+
   $mon = date('n');
   $output_table = _awstats_mfg_report($mon);
 
   $module = 'awstats_mfg';
   $key = 'awstats';
   $to = _awstats_mfg_get_recipients($form_state['values']['awstats_mfg_email_test_recipients']);
-  $from = variable_get('site_email');
-  //TODO: Check that $to and $from have values
-  $params['message'] = $output_table;
-  $language = language_default();
-  $send = true;
-  $result = drupal_mail($module, $key, $to, $language, $params, $from, $send);
-  if ($result['result'] == TRUE) {
-    drupal_set_message(t('The test report has been sent.'));
-  }
-  else {
-    drupal_set_message(t('There was a problem sending the report and it was not sent.'), 'error');
+  $from = variable_get('site_mail');
+  if(!count($to) || !$from) {
+    drupal_set_message(t('Test report not sent; missing recipients or site email address.'), 'error');
+  } else {
+    $params['message'] = $output_table;
+    $language = language_default();
+    $send = true;
+    $result = drupal_mail($module, $key, $to, $language, $params, $from, $send);
+    if ($result['result'] == TRUE) {
+      drupal_set_message(t('The test report has been sent.'));
+    }
+    else {
+      drupal_set_message(t('There was a problem sending the report and it was not sent.'), 'error');
+    }
   }
 }
 
@@ -191,7 +197,52 @@ function awstats_mfg_cron() {
   $cmd = "unset GATEWAY_INTERFACE && $awstats_prog -config=$config";
   //dpm($cmd);
   exec($cmd, $output);
+  awstats_mfg_send_report_email();
   //dpm($output);
+}
+
+function awstats_mfg_send_report_email() {
+  if(variable_get('awstats_mfg_enable_email')) {
+    // Search from high to low for the day of the month less or equal to now
+    $days = _awstats_mfg_get_days_of_month(variable_get('awstats_mfg_email_days_of_month'));
+    $curr_day = date('j');
+    $most_recent_day = 0;
+    for($i = count($days) -1; $i >= 0; $i--) {
+      if($days[$i] <= $curr_day) {
+        $most_recent_day = $days[$i];
+        break;
+      }
+    }
+    if($most_recent_day) {
+      // convert day to timestamp
+      $current = getdate();
+      $most_recent_ts = strtotime($current['mon'].'/'.$most_recent_day.'/'.$current['year']);
+      $last_report_ts = variable_get('awstats_mfg_email_last_report', 0);
+      if($last_report_ts < $most_recent_ts) { // If have not sent one yet for this day
+        variable_set('awstats_mfg_email_last_report', time());
+        $mon = $current['mon'];
+        $output_table = _awstats_mfg_report($mon);
+        $module = 'awstats_mfg';
+        $key = 'awstats';
+        $to = _awstats_mfg_get_recipients(variable_get('awstats_mfg_recipients', ''));
+        $from = variable_get('site_mail');
+        if(!count($to) || !$from) {
+          watchdog('error', t('Awstats report not sent; missing recipients or site email address.'));
+        } else {
+          $params['message'] = $output_table;
+          $language = language_default();
+          $send = true;
+          $result = drupal_mail($module, $key, $to, $language, $params, $from, $send);
+          if ($result['result'] == TRUE) {
+            watchdog('info', t('The Awstats report has been sent for day @day.', array('@day' => $most_recent_day)));
+          }
+          else {
+            watchdog('error', t('There was a problem sending the report and it was not sent.'));
+          }
+        }
+      }
+    }
+  }
 }
 
 function _awstats_mfg_get_recipients($str) {
